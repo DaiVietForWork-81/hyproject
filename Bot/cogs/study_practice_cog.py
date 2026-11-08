@@ -199,6 +199,38 @@ class StudyPracticeCog(commands.Cog, name="StudyPractice"):
                         str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
                         today_str, thoi_gian or 45, now_iso,
                     )
+                # Đồng bộ hồ sơ học tập lên Turso Cloud để Web hiển thị tức thì
+                try:
+                    from database.turso_client import turso_db
+                    if turso_db.is_configured:
+                        sync_row = await self.bot.db.fetchone(
+                            """SELECT discord_id, username, display_name, avatar_url, current_streak, max_streak,
+                                      last_study_date, study_xp, pomodoro_count, study_minutes, exams_completed,
+                                      docs_contributed, dream_school, dream_score, updated_at
+                               FROM study_profiles WHERE discord_id = ?""",
+                            interaction.user.id,
+                        )
+                        if sync_row:
+                            await turso_db.execute(
+                                """INSERT INTO study_profiles
+                                   (discord_id, username, display_name, avatar_url, current_streak, max_streak,
+                                    last_study_date, study_xp, pomodoro_count, study_minutes, exams_completed,
+                                    docs_contributed, dream_school, dream_score, updated_at)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   ON CONFLICT(discord_id) DO UPDATE SET
+                                    username = excluded.username,
+                                    display_name = excluded.display_name,
+                                    avatar_url = CASE WHEN excluded.avatar_url != '' THEN excluded.avatar_url ELSE study_profiles.avatar_url END,
+                                    current_streak = MAX(study_profiles.current_streak, excluded.current_streak),
+                                    max_streak = MAX(study_profiles.max_streak, excluded.max_streak),
+                                    last_study_date = MAX(study_profiles.last_study_date, excluded.last_study_date),
+                                    study_xp = MAX(study_profiles.study_xp, excluded.study_xp),
+                                    exams_completed = MAX(study_profiles.exams_completed, excluded.exams_completed),
+                                    updated_at = excluded.updated_at""",
+                                *sync_row,
+                            )
+                except Exception:
+                    pass
             except Exception as e:
                 log.debug("Lỗi đồng bộ study_profiles trong /luyende: %s", e)
 

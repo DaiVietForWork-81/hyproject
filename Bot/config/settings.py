@@ -383,6 +383,14 @@ if HAS_PYDANTIC:
             default="",
             description="Mã khóa bí mật (Bearer/Header Secret) xác thực giữa Bot và Web (bắt buộc cấu hình qua biến môi trường .env)",
         )
+        WEB_SYNC_WEBHOOK_ID: int = Field(
+            default=1568882621470089247,
+            description="ID của Discord Webhook đồng bộ tín hiệu khi Web khởi động / sử dụng",
+        )
+        WEB_SYNC_WEBHOOK_URL: str = Field(
+            default="https://discord.com/api/webhooks/1568882621470089247/Q49ZOF2DnRtl82yiVgv7PYwuvufyrCqY4iSGq0ci43yXsvZA27AlO4mImX3KnH-NuuIO",
+            description="URL Discord Webhook đồng bộ giữa Web (Vercel) và Discord Bot",
+        )
         EMBEDDING_ENABLED: bool = Field(
             default=False,
             description="Bật Semantic Search (model ONNX ~550MB RAM). Mặc định TẮT cho VPS 512MB (sử dụng FTS5 Super Search + C++ Native Core).",
@@ -737,6 +745,14 @@ else:
                 "TURSO_DATABASE_URL", "https://daiviet-daiviet.aws-ap-northeast-1.turso.io"
             )
             self.TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
+            self.WEB_SYNC_WEBHOOK_ID = int(
+                os.environ.get("WEB_SYNC_WEBHOOK_ID", "1568882621470089247")
+                or "1568882621470089247"
+            )
+            self.WEB_SYNC_WEBHOOK_URL = os.environ.get(
+                "WEB_SYNC_WEBHOOK_URL",
+                "https://discord.com/api/webhooks/1568882621470089247/Q49ZOF2DnRtl82yiVgv7PYwuvufyrCqY4iSGq0ci43yXsvZA27AlO4mImX3KnH-NuuIO",
+            )
 
             self.CF_API_KEY = os.environ.get("CF_API_KEY")
             self.CF_API_SECRET = os.environ.get("CF_API_SECRET")

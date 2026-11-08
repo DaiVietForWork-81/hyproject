@@ -41,6 +41,15 @@ ADMIN_ROLE_IDS = {
 }
 BOT_OWNER_ID = 1529864608813416449
 DISCORD_GUILD_ID = 1532265330079174697
+WEB_SYNC_WEBHOOK_ID = int(getattr(settings, "WEB_SYNC_WEBHOOK_ID", 1568882621470089247) or 1568882621470089247)
+WEB_SYNC_WEBHOOK_URL = (
+    getattr(
+        settings,
+        "WEB_SYNC_WEBHOOK_URL",
+        "https://discord.com/api/webhooks/1568882621470089247/Q49ZOF2DnRtl82yiVgv7PYwuvufyrCqY4iSGq0ci43yXsvZA27AlO4mImX3KnH-NuuIO",
+    )
+    or "https://discord.com/api/webhooks/1568882621470089247/Q49ZOF2DnRtl82yiVgv7PYwuvufyrCqY4iSGq0ci43yXsvZA27AlO4mImX3KnH-NuuIO"
+)
 
 
 class BotAPIBridge:
@@ -55,6 +64,17 @@ class BotAPIBridge:
         self._general_rate_limits: dict[str, list[float]] = {}
         self._doc_stats_cache: tuple[dict, float] | None = None
         self._doc_min_id_cache: tuple[dict[str, tuple[int, int]], float] | None = None
+        # Trạng thái kết nối & đồng bộ 2 chiều qua Discord Webhook (1568882621470089247)
+        self.web_connected: bool = False
+        self.last_web_signal_ts: int = 0
+        self.last_web_origin: str = "https://orbit-psi-black.vercel.app"
+        self.last_web_event: str = ""
+        self.last_web_user: str = ""
+        self.last_web_channel_id: int = 0
+        self.web_handshake_count: int = 0
+        self._last_webhook_reply_ts: float = 0.0
+        self._last_webhook_reconcile_ts: float = 0.0
+        self._webhook_listener_registered: bool = False
         self.app = web.Application(
             client_max_size=30 * 1024 * 1024,  # Giới hạn an toàn 30 MB
             middlewares=[self._cors_middleware, self._rate_limit_middleware, self._auth_middleware],
@@ -370,7 +390,7 @@ class BotAPIBridge:
         if request.method in ("POST", "DELETE", "PATCH", "PUT"):
             # Endpoint upload, import_gdrive, notify, account/link, study, forum, admin và system endpoints sẽ tự kiểm tra xác thực bên trong handler
             if (
-                request.path in ("/api/documents/upload", "/api/documents/sync_pending", "/api/documents/import_gdrive", "/api/notify", "/api/account/link", "/api/account/verify-member", "/api/account/verify-code", "/api/study/checkin")
+                request.path in ("/api/documents/upload", "/api/documents/sync_pending", "/api/documents/import_gdrive", "/api/notify", "/api/account/link", "/api/account/verify-member", "/api/account/verify-code", "/api/study/checkin", "/api/webhook/handshake")
                 or request.path.startswith("/api/study/")
                 or request.path.startswith("/api/forum/")
                 or request.path.startswith("/api/admin/")
@@ -462,6 +482,9 @@ class BotAPIBridge:
         self.app.router.add_post("/api/system/apply_update", self.handle_system_apply_update)
         self.app.router.add_post("/api/system/reload", self.handle_system_reload)
         self.app.router.add_post("/api/system/announce_startup", self.handle_system_announce_startup)
+        # Endpoints Discord Webhook Handshake & Kết Nối Thời Gian Thực (Web <-> Bot)
+        self.app.router.add_get("/api/webhook/handshake", self.handle_webhook_handshake)
+        self.app.router.add_post("/api/webhook/handshake", self.handle_webhook_handshake)
 
     async def handle_status(self, request: web.Request) -> web.Response:
         """GET /api/status: Trả về trạng thái hoạt động của Bot."""
@@ -476,6 +499,12 @@ class BotAPIBridge:
             "guilds_count": len(self.bot.guilds),
             "uptime_seconds": uptime,
             "timestamp": int(time.time()),
+            "web_connected": self.web_connected,
+            "last_web_signal_ts": self.last_web_signal_ts,
+            "last_web_origin": self.last_web_origin,
+            "last_web_event": self.last_web_event,
+            "web_handshake_count": self.web_handshake_count,
+            "webhook_id": str(WEB_SYNC_WEBHOOK_ID),
         })
 
     async def handle_get_skills(self, request: web.Request) -> web.Response:
@@ -4790,8 +4819,269 @@ class BotAPIBridge:
             logger.error("Lỗi khi gửi thông báo khởi động: %s", e)
             return web.json_response({"success": False, "error": str(e)}, status=500)
 
+    async def handle_webhook_handshake(self, request: web.Request) -> web.Response:
+        """GET/POST /api/webhook/handshake: Nhận tín hiệu khởi động/sử dụng từ Web, gửi/ghi nhận qua Discord Webhook
+        1568882621470089247 và kích hoạt đồng bộ 2 chiều tức thì giữa Bot <-> Web.
+        """
+        body: dict[str, Any] = {}
+        if request.method == "POST":
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+
+        event_type = str(body.get("event") or request.query.get("event") or "web_active").strip()
+        origin = str(
+            body.get("origin")
+            or request.headers.get("Origin")
+            or "https://orbit-psi-black.vercel.app"
+        ).strip()
+        view_name = str(body.get("view") or "home").strip()
+        tab_name = str(body.get("tab") or "overview").strip()
+        user_name = str(body.get("username") or body.get("user") or "Khách truy cập").strip()
+        notify_discord = body.get("notify_discord", True)
+
+        now_ts = int(time.time())
+        self.web_connected = True
+        self.last_web_signal_ts = now_ts
+        self.last_web_origin = origin or "https://orbit-psi-black.vercel.app"
+        self.last_web_event = event_type
+        self.last_web_user = user_name
+        self.web_handshake_count += 1
+
+        # Nếu Web gọi trực tiếp vào Bot API (local/LAN) và yêu cầu phát tín hiệu lên kênh Webhook
+        webhook_sent = False
+        if notify_discord and WEB_SYNC_WEBHOOK_URL:
+            webhook_sent = await self._emit_web_sync_webhook(
+                event_type=event_type,
+                origin=self.last_web_origin,
+                view_name=view_name,
+                tab_name=tab_name,
+                user_name=user_name,
+            )
+
+        # Kích hoạt đồng bộ 2 chiều ngay lập tức
+        asyncio.create_task(self._process_turso_rpc_queue())
+        asyncio.create_task(self._push_turso_telemetry_snapshot())
+        if time.monotonic() - self._last_webhook_reconcile_ts >= 15.0 or event_type in ("web_boot", "handshake", "manual_sync"):
+            self._last_webhook_reconcile_ts = time.monotonic()
+            asyncio.create_task(self._reconcile_turso_sqlite_tables())
+
+        ping = round(self.bot.latency * 1000, 2) if hasattr(self.bot, "latency") and self.bot.latency == self.bot.latency else 0.0
+        return web.json_response({
+            "success": True,
+            "status": "connected",
+            "webhook_id": str(WEB_SYNC_WEBHOOK_ID),
+            "webhook_sent": webhook_sent,
+            "bot_user": str(self.bot.user) if self.bot.user else "Orbit Bot",
+            "bot_id": str(self.bot.user.id) if self.bot.user else "0",
+            "ping_ms": ping,
+            "web_connected": self.web_connected,
+            "last_web_signal_ts": self.last_web_signal_ts,
+            "last_web_origin": self.last_web_origin,
+            "last_web_event": self.last_web_event,
+            "web_handshake_count": self.web_handshake_count,
+            "message": "Bot đã ghi nhận tín hiệu từ Web và kích hoạt đồng bộ 2 chiều!",
+        })
+
+    async def _emit_web_sync_webhook(
+        self,
+        event_type: str = "web_active",
+        origin: str = "https://orbit-psi-black.vercel.app",
+        view_name: str = "home",
+        tab_name: str = "overview",
+        user_name: str = "Khách truy cập",
+    ) -> bool:
+        """Gửi tín hiệu đồng bộ qua Discord Webhook 1568882621470089247."""
+        if not WEB_SYNC_WEBHOOK_URL:
+            return False
+        try:
+            import aiohttp as _aiohttp
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            payload = {
+                "username": "Orbit Web Gateway • Vercel",
+                "avatar_url": "https://orbit-psi-black.vercel.app/server_icon.png",
+                "content": (
+                    f"⚡ **[ORBIT_WEB_SYNC]** Tín hiệu hoạt động từ **Orbit Web** (`{origin}`) "
+                    f"• Sự kiện: `{event_type}`"
+                ),
+                "embeds": [
+                    {
+                        "title": "🌐 Orbit Web ↔ Discord Bot Handshake",
+                        "description": (
+                            "Web đã khởi động/đang được sử dụng và gửi tín hiệu đồng bộ tới kênh điều phối."
+                        ),
+                        "color": 0xEC4899,
+                        "fields": [
+                            {"name": "🔗 Web URL", "value": f"[orbit-psi-black.vercel.app]({origin})", "inline": True},
+                            {"name": "⚡ Sự kiện", "value": f"`{event_type}`", "inline": True},
+                            {"name": "🧭 Giao diện", "value": f"`{view_name} / {tab_name}`", "inline": True},
+                            {"name": "👤 Phiên người dùng", "value": f"`{user_name}`", "inline": True},
+                            {"name": "🆔 Webhook ID", "value": f"`{WEB_SYNC_WEBHOOK_ID}`", "inline": True},
+                        ],
+                        "footer": {"text": "Orbit Sync Protocol • Real-time Webhook Bridge"},
+                        "timestamp": now_iso,
+                    }
+                ],
+            }
+            async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=6.0)) as sess:
+                async with sess.post(f"{WEB_SYNC_WEBHOOK_URL}?wait=true", json=payload) as resp:
+                    return resp.status in (200, 201, 204)
+        except Exception as e:
+            logger.debug(f"Emit web sync webhook error: {e}")
+            return False
+
+    async def on_web_webhook_message(self, message: discord.Message) -> None:
+        """Listener lắng nghe trực tiếp tin nhắn từ Discord Webhook 1568882621470089247 trong kênh.
+        Khi Web khởi động hoặc được sử dụng và bắn Webhook vào kênh:
+        1. Bot ghi nhận kết nối từ Web ngay lập tức (0ms qua Discord Gateway).
+        2. Bot thả reaction ✅ xác nhận trên tin nhắn Webhook.
+        3. Bot phản hồi Embed xác nhận đã kết nối với Web và kích hoạt đồng bộ 2 chiều (Turso + SQLite + RPC Queue).
+        """
+        if not message or not message.webhook_id:
+            return
+
+        target_webhook_id = int(getattr(settings, "WEB_SYNC_WEBHOOK_ID", WEB_SYNC_WEBHOOK_ID) or WEB_SYNC_WEBHOOK_ID)
+        raw_content = (message.content or "").strip()
+
+        # Chỉ bắt tin nhắn từ đúng Webhook 1568882621470089247 hoặc có cờ [ORBIT_WEB_SYNC]
+        if message.webhook_id != target_webhook_id and "[ORBIT_WEB_SYNC]" not in raw_content:
+            return
+
+        # Bỏ qua nếu là tin nhắn tự xác nhận của chính Bot (tránh vòng lặp)
+        if "[ORBIT_BOT_ACK]" in raw_content or (message.author and "Orbit Bot ACK" in (message.author.name or "")):
+            return
+
+        # Bóc tách thông tin sự kiện từ nội dung / embed của Webhook
+        event_type = "web_active"
+        web_origin = "https://orbit-psi-black.vercel.app"
+        user_label = "Thành viên / Khách Web"
+        view_label = "home"
+
+        ev_match = re.search(r"Sự kiện:\s*`([^`]+)`", raw_content)
+        if ev_match:
+            event_type = ev_match.group(1).strip()
+        url_match = re.search(r"\(`(https?://[^`]+)`\)", raw_content)
+        if url_match:
+            web_origin = url_match.group(1).strip()
+
+        if message.embeds:
+            emb = message.embeds[0]
+            for fld in getattr(emb, "fields", []):
+                fname = (fld.name or "").lower()
+                fval = (fld.value or "").strip().strip("`")
+                if "sự kiện" in fname or "event" in fname:
+                    event_type = fval or event_type
+                elif "phiên" in fname or "user" in fname or "người dùng" in fname:
+                    user_label = fval or user_label
+                elif "giao diện" in fname or "view" in fname:
+                    view_label = fval or view_label
+                elif "web url" in fname:
+                    m_u = re.search(r"\((https?://[^)]+)\)", fval)
+                    if m_u:
+                        web_origin = m_u.group(1).strip()
+
+        now_ts = int(time.time())
+        now_mono = time.monotonic()
+        self.web_connected = True
+        self.last_web_signal_ts = now_ts
+        self.last_web_origin = web_origin
+        self.last_web_event = event_type
+        self.last_web_user = user_label
+        self.last_web_channel_id = message.channel.id
+        self.web_handshake_count += 1
+
+        logger.info(
+            f"🔗 [Webhook 1568882621470089247] Bot đã ghi nhận tín hiệu từ Web ({web_origin}) "
+            f"| Sự kiện: {event_type} | User: {user_label}"
+        )
+
+        # 1. Thả reaction ✅ (hoặc ⚡ cho rpc_wakeup) để đánh dấu Bot đã nhận tín hiệu
+        try:
+            reaction_emoji = "⚡" if event_type == "rpc_wakeup" else "✅"
+            await message.add_reaction(reaction_emoji)
+        except Exception:
+            pass
+
+        # 2. Kích hoạt xử lý hàng đợi RPC + đẩy Telemetry + đối soát CSDL 2 chiều ngay lập tức
+        try:
+            await self._process_turso_rpc_queue()
+            await self._push_turso_telemetry_snapshot()
+            if event_type != "rpc_wakeup" or (now_mono - self._last_webhook_reconcile_ts >= 30.0):
+                self._last_webhook_reconcile_ts = now_mono
+                asyncio.create_task(self._reconcile_turso_sqlite_tables())
+                intake_cog = self.bot.get_cog("DocumentIntakeCog")
+                if intake_cog and hasattr(intake_cog, "sync_pending_turso_documents"):
+                    asyncio.create_task(intake_cog.sync_pending_turso_documents())
+        except Exception as sync_err:
+            logger.debug(f"Webhook immediate sync error: {sync_err}")
+
+        # 3. Gửi tin nhắn phản hồi xác nhận kết nối trong kênh (có chống spam thông minh cho rpc_wakeup)
+        should_reply_embed = (
+            event_type in ("web_boot", "handshake", "manual_sync")
+            or (event_type != "rpc_wakeup" and (now_mono - self._last_webhook_reply_ts >= 60.0))
+        )
+        if should_reply_embed:
+            self._last_webhook_reply_ts = now_mono
+            try:
+                ping_ms = round(self.bot.latency * 1000, 1) if hasattr(self.bot, "latency") and self.bot.latency == self.bot.latency else 15.0
+                ack_embed = discord.Embed(
+                    title="🟢 Orbit Bot ↔ Orbit Web — Đã Ghi Nhận & Kết Nối Đồng Bộ!",
+                    description=(
+                        f"🤖 **{self.bot.user.name if self.bot.user else 'Orbit Bot'}** đã nhận tín hiệu khởi động/hoạt động từ **Orbit Web** "
+                        f"qua Webhook `{target_webhook_id}` và thiết lập đường truyền đồng bộ 2 chiều thời gian thực."
+                    ),
+                    color=0x10B981,
+                    timestamp=datetime.datetime.now(datetime.timezone.utc),
+                )
+                ack_embed.add_field(
+                    name="🌐 Web Đang Kết Nối",
+                    value=f"[orbit-psi-black.vercel.app]({web_origin})",
+                    inline=True,
+                )
+                ack_embed.add_field(
+                    name="⚡ Sự Kiện & Giao Diện",
+                    value=f"`{event_type}` • `{view_label}`",
+                    inline=True,
+                )
+                ack_embed.add_field(
+                    name="👤 Phiên Hoạt Động",
+                    value=f"`{user_label}`",
+                    inline=True,
+                )
+                ack_embed.add_field(
+                    name="🏓 Độ Trễ Bot Gateway",
+                    value=f"`{ping_ms} ms` (Online)",
+                    inline=True,
+                )
+                ack_embed.add_field(
+                    name="🔄 Đồng Bộ 2 Chiều",
+                    value="`Turso Cloud ↔ SQLite FTS5 ↔ Discord`",
+                    inline=True,
+                )
+                ack_embed.add_field(
+                    name="📊 Lượt Handshake",
+                    value=f"`#{self.web_handshake_count}`",
+                    inline=True,
+                )
+                ack_embed.set_footer(
+                    text="Orbit Bidirectional Sync • Bot ↔ Web Connected",
+                    icon_url="https://orbit-psi-black.vercel.app/server_icon.png",
+                )
+                await message.reply(embed=ack_embed, mention_author=False)
+            except Exception as reply_err:
+                logger.debug(f"Không thể gửi reply xác nhận Webhook: {reply_err}")
+
     async def start(self) -> None:
         """Khởi chạy HTTP Server trên background task."""
+        # Luôn đăng ký listener lắng nghe Discord Webhook 1568882621470089247 ngay cả khi port local bận
+        if not self._webhook_listener_registered:
+            self.bot.add_listener(self.on_web_webhook_message, "on_message")
+            self._webhook_listener_registered = True
+            logger.info(
+                f"📡 Đã kích hoạt bộ lắng nghe Discord Webhook ({WEB_SYNC_WEBHOOK_ID}) kết nối trực tiếp Web <-> Bot!"
+            )
+
         if not settings.BOT_API_ENABLED:
             logger.info("Bot API Bridge bị tắt bởi cấu hình.")
             return
@@ -4888,6 +5178,12 @@ class BotAPIBridge:
             "uptime_seconds": uptime,
             "timestamp": now_ts,
             "bridge_mode": "vercel_turso_direct",
+            "web_connected": self.web_connected,
+            "last_web_signal_ts": self.last_web_signal_ts,
+            "last_web_origin": self.last_web_origin,
+            "last_web_event": self.last_web_event,
+            "web_handshake_count": self.web_handshake_count,
+            "webhook_id": str(WEB_SYNC_WEBHOOK_ID),
         }
         await turso_db.execute(
             """INSERT INTO bot_kv_store (key, value, updated_at) VALUES ('status', ?, ?)
