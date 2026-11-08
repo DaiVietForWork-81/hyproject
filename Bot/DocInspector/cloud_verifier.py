@@ -275,6 +275,8 @@ Nếu tên tệp và tiêu đề không ghi rõ khối lớp (hoặc chỉ ghi "
   "has_answer_keys": true,
   "has_detailed_solutions": false,
   "curriculum_topic_detected": "Chuyên đề kiến thức trọng tâm nhận diện được (ví dụ: Hàm số & Tọa độ Oxyz Toán 12)",
+  "short_label": "Nhãn tóm tắt chuẩn theo cú pháp: Lớp <6-12> <Thường|HSG|Chuyên|Quốc tế> <Toán|Lý|Hóa|Sinh|Tin|Văn|Anh|Sử|Địa|KHTN|Sử - Địa|GDCD|GDKT&PL> (Ví dụ: Lớp 9 Chuyên Tin, Lớp 11 Thường Hóa, Lớp 7 HSG Toán)",
+  "exam_description": "Mô tả ngắn 1-2 câu tự nhiên về đề thi bắt đầu bằng short_label (Ví dụ: Lớp 9 Chuyên Tin — Đề thi tuyển sinh vào lớp 10 Chuyên Tin học gồm các bài toán quy hoạch động, số học và lý thuyết đồ thị.)",
   "confidence": 0.99
 }"""
 
@@ -330,6 +332,249 @@ def _build_payload_for_model(
             "enable_thinking": False,
         }
     return payload
+
+
+_SUBJECT_SHORT_VI_MAP: Dict[str, str] = {
+    "MATHEMATICS": "Toán",
+    "TOAN": "Toán",
+    "Toán": "Toán",
+    "PHYSICS": "Lý",
+    "VAT_LY": "Lý",
+    "Vật lí": "Lý",
+    "Vật lý": "Lý",
+    "CHEMISTRY": "Hóa",
+    "HOA_HOC": "Hóa",
+    "Hóa học": "Hóa",
+    "BIOLOGY": "Sinh",
+    "SINH_HOC": "Sinh",
+    "Sinh học": "Sinh",
+    "INFORMATICS": "Tin",
+    "TIN_HOC": "Tin",
+    "Tin học": "Tin",
+    "LITERATURE": "Văn",
+    "NGU_VAN": "Văn",
+    "Ngữ văn": "Văn",
+    "ENGLISH": "Anh",
+    "TIENG_ANH": "Anh",
+    "Ngoại ngữ 1 (Tiếng Anh)": "Anh",
+    "Tiếng Anh": "Anh",
+    "HISTORY": "Sử",
+    "LICH_SU": "Sử",
+    "Lịch sử": "Sử",
+    "GEOGRAPHY": "Địa",
+    "DIA_LY": "Địa",
+    "Địa lí": "Địa",
+    "Địa lý": "Địa",
+    "NATURAL_SCIENCE": "KHTN",
+    "KHTN": "KHTN",
+    "Khoa học tự nhiên": "KHTN",
+    "HISTORY_GEOGRAPHY": "Sử - Địa",
+    "LS_DL": "Sử - Địa",
+    "Lịch sử và Địa lí": "Sử - Địa",
+    "Lịch sử và Địa lý": "Sử - Địa",
+    "CIVIC_EDUCATION": "GDCD",
+    "GDCD": "GDCD",
+    "Giáo dục công dân": "GDCD",
+    "ECONOMIC_LEGAL_EDU": "GDKT&PL",
+    "GDKT_PL": "GDKT&PL",
+    "Giáo dục kinh tế và pháp luật": "GDKT&PL",
+    "TECHNOLOGY": "Công nghệ",
+    "CONG_NGHE": "Công nghệ",
+    "Công nghệ": "Công nghệ",
+    "DEFENSE_SECURITY_EDU": "GDQP&AN",
+    "GDQP_AN": "GDQP&AN",
+    "Giáo dục quốc phòng và an ninh": "GDQP&AN",
+    "GENERAL": "Tổng hợp",
+}
+
+_SUBJECT_FULL_VI_MAP: Dict[str, str] = {
+    "MATHEMATICS": "Toán học",
+    "PHYSICS": "Vật lí",
+    "CHEMISTRY": "Hóa học",
+    "BIOLOGY": "Sinh học",
+    "INFORMATICS": "Tin học",
+    "LITERATURE": "Ngữ văn",
+    "ENGLISH": "Tiếng Anh",
+    "HISTORY": "Lịch sử",
+    "GEOGRAPHY": "Địa lí",
+    "NATURAL_SCIENCE": "Khoa học tự nhiên (Cấp 2)",
+    "HISTORY_GEOGRAPHY": "Lịch sử và Địa lí (Cấp 2)",
+    "CIVIC_EDUCATION": "Giáo dục công dân (Cấp 2)",
+    "ECONOMIC_LEGAL_EDU": "Giáo dục kinh tế và pháp luật (Cấp 3)",
+    "TECHNOLOGY": "Công nghệ",
+    "DEFENSE_SECURITY_EDU": "Giáo dục quốc phòng và an ninh",
+    "GENERAL": "Tài liệu tổng hợp",
+}
+
+
+def _detect_topic_from_text(subject_code: str, grade_num: Optional[int], raw_text: str, file_name: str = "") -> str:
+    corpus = f"{file_name} {(raw_text or '')[:12000]}".lower()
+    topics: List[str] = []
+    if subject_code in ("MATHEMATICS", "TOAN", "Toán"):
+        if re.search(r"(khảo\s*sát\s*hàm\s*số|cực\s*trị|đồng\s*biến|nghịch\s*biến|tiệm\s*cận)", corpus):
+            topics.append("khảo sát & ứng dụng đạo hàm")
+        if re.search(r"(nguyên\s*hàm|tích\s*phân)", corpus):
+            topics.append("nguyên hàm - tích phân")
+        if re.search(r"(oxyz|mặt\s*cầu|mặt\s*phẳng|vectơ\s*trong\s*không\s*gian)", corpus):
+            topics.append("hình học không gian Oxyz")
+        if re.search(r"(xác\s*suất\s*có\s*điều\s*kiện|công\s*thức\s*bayes|xác\s*suất|tổ\s*hợp|chỉnh\s*hợp|vách\s*ngăn)", corpus):
+            topics.append("tổ hợp & xác suất")
+        if re.search(r"(lượng\s*giác|cấp\s*số\s*cộng|cấp\s*số\s*nhân|giới\s*hạn)", corpus):
+            topics.append("lượng giác, dãy số & giới hạn")
+        if re.search(r"(mũ|lôgarit|logarit)", corpus):
+            topics.append("hàm số mũ & lôgarit")
+        if re.search(r"(vi[\-\s]*ét|phương\s*trình\s*bậc\s*hai|căn\s*bậc\s*hai|tứ\s*giác\s*nội\s*tiếp)", corpus):
+            topics.append("căn thức, định lý Vi-ét & hình học đường tròn")
+        if re.search(r"(tỉ\s*lệ\s*thức|dãy\s*tỉ\s*số|số\s*hữu\s*tỉ|tam\s*giác\s*bằng\s*nhau)", corpus):
+            topics.append("số hữu tỉ, tỉ lệ thức & tam giác")
+        if re.search(r"(hằng\s*đẳng\s*thức|phân\s*thức\s*đại\s*số|thal[eè]s|tam\s*giác\s*đồng\s*dạng)", corpus):
+            topics.append("đa thức, phân thức & định lý Thalès")
+    elif subject_code in ("PHYSICS", "VAT_LY", "Vật lí", "Vật lý"):
+        if re.search(r"(vật\s*lí\s*nhiệt|nội\s*năng|nhiệt\s*nóng\s*chảy|khí\s*lí\s*tưởng)", corpus):
+            topics.append("vật lí nhiệt & khí lí tưởng")
+        if re.search(r"(từ\s*trường|cảm\s*ứng\s*điện\s*từ|dòng\s*điện\s*xoay\s*chiều)", corpus):
+            topics.append("từ trường & cảm ứng điện từ")
+        if re.search(r"(hạt\s*nhân|phóng\s*xạ|độ\s*hụt\s*khối)", corpus):
+            topics.append("vật lí hạt nhân")
+        if re.search(r"(dao\s*động\s*điều\s*hòa|con\s*lắc|sóng\s*cơ|giao\s*thoa)", corpus):
+            topics.append("dao động điều hòa & sóng cơ")
+        if re.search(r"(điện\s*trường|coulomb|tụ\s*điện|dòng\s*điện\s*không\s*đổi)", corpus):
+            topics.append("điện trường & dòng điện không đổi")
+        if re.search(r"(động\s*học|định\s*luật\s*newton|động\s*lượng|công\s*năng\s*lượng)", corpus):
+            topics.append("động học & động lực học chất điểm")
+    elif subject_code in ("CHEMISTRY", "HOA_HOC", "Hóa học"):
+        if re.search(r"(ester|lipid|carbohydrate|glucose|saccharose|tinh\s*bột)", corpus):
+            topics.append("ester - lipid & carbohydrate")
+        if re.search(r"(amine|amino\s*acid|peptide|protein|polymer)", corpus):
+            topics.append("hợp chất chứa nitrogen & polymer")
+        if re.search(r"(pin\s*điện|điện\s*phân|đại\s*cương\s*kim\s*loại|phức\s*chất)", corpus):
+            topics.append("điện hóa học & đại cương kim loại")
+        if re.search(r"(cân\s*bằng\s*hóa\s*học|\bph\b|nitrogen|sulfur)", corpus):
+            topics.append("cân bằng hóa học, pH & nguyên tố nhóm VA-VIA")
+        if re.search(r"(hydrocarbon|alkane|alkene|alkyne|alcohol|phenol|aldehyde|carboxylic)", corpus):
+            topics.append("hóa hữu cơ (hydrocarbon & dẫn xuất)")
+        if re.search(r"(cấu\s*tạo\s*nguyên\s*tử|bảng\s*tuần\s*hoàn|liên\s*kết\s*hóa\s*học|oxi\s*hóa\s*khử|enthalpy)", corpus):
+            topics.append("cấu tạo nguyên tử, liên kết hóa học & năng lượng phản ứng")
+    elif subject_code in ("BIOLOGY", "SINH_HOC", "Sinh học"):
+        if re.search(r"(adn|arn|phiên\s*mã|dịch\s*mã|operon|đột\s*biến|nhiễm\s*sắc\s*thể)", corpus):
+            topics.append("cơ chế di truyền & biến dị cấp phân tử - tế bào")
+        if re.search(r"(quy\s*luật\s*di\s*truyền|mendel|morgan|di\s*truyền\s*quần\s*thể|di\s*truyền\s*người)", corpus):
+            topics.append("quy luật di truyền & di truyền học quần thể")
+        if re.search(r"(tiến\s*hóa|sinh\s*thái|quần\s*xã|hệ\s*sinh\s*thái)", corpus):
+            topics.append("tiến hóa & sinh thái học")
+        if re.search(r"(quang\s*hợp|hô\s*hấp|chuyển\s*hóa\s*vật\s*chất|cảm\s*ứng|sinh\s*trưởng)", corpus):
+            topics.append("sinh học cơ thể (trao đổi chất, cảm ứng & sinh trưởng)")
+    elif subject_code in ("INFORMATICS", "TIN_HOC", "Tin học"):
+        if re.search(r"(quy\s*hoạch\s*động|đồ\s*thị|cây\s*khung|dijkstra|bfs|dfs|nhị\s*phân|số\s*học)", corpus):
+            topics.append("thuật toán quy hoạch động, số học & đồ thị")
+        if re.search(r"(python|c\+\+|pascal|mảng|xâu\s*ký\s*tự|hàm|đệ\s*quy)", corpus):
+            topics.append("kỹ thuật lập trình & cấu trúc dữ liệu")
+        if re.search(r"(sql|cơ\s*sở\s*dữ\s*liệu|html|css|mạng\s*máy\s*tính|trí\s*tuệ\s*nhân\s*tạo)", corpus):
+            topics.append("cơ sở dữ liệu, mạng máy tính & phát triển web")
+    elif subject_code in ("LITERATURE", "NGU_VAN", "Ngữ văn"):
+        if re.search(r"(đọc\s*hiểu|nghị\s*luận\s*xã\s*hội|nlxh|nghị\s*luận\s*văn\s*học|nlvh|điển\s*tích)", corpus):
+            topics.append("đọc hiểu văn bản, nghị luận xã hội & nghị luận văn học")
+    elif subject_code in ("ENGLISH", "TIENG_ANH", "Ngoại ngữ 1 (Tiếng Anh)", "Tiếng Anh"):
+        if re.search(r"(phonetics|stress|grammar|vocabulary|reading\s*comprehension|cloze|idioms|phrasal\s*verbs|rewrite)", corpus):
+            topics.append("ngữ âm, từ vựng - ngữ pháp & đọc hiểu tiếng Anh")
+
+    return ", ".join(topics[:3])
+
+
+def build_exam_description_vi(
+    parsed: Dict[str, Any], file_name: str = "", raw_text: str = ""
+) -> tuple[str, str]:
+    """
+    Tạo Nhãn Phân Loại Ngắn (`short_label`) và Mô Tả Đề (`exam_description`) chuẩn hóa:
+    Ví dụ:
+      - short_label: "Lớp 9 Chuyên Tin", "Lớp 11 Thường Hóa", "Lớp 7 HSG Toán"
+      - exam_description: "Lớp 9 Chuyên Tin — Đề thi tuyển sinh vào lớp 10 Chuyên Tin học gồm các bài toán quy hoạch động, số học và đồ thị."
+    """
+    subj_raw = str(parsed.get("subject") or "GENERAL").strip()
+    subj_short = _SUBJECT_SHORT_VI_MAP.get(subj_raw, _SUBJECT_SHORT_VI_MAP.get(subj_raw.upper(), "Tổng hợp"))
+    subj_full = _SUBJECT_FULL_VI_MAP.get(subj_raw.upper(), subj_short)
+
+    grade_str = str(parsed.get("grade_level") or parsed.get("estimated_level") or "").strip()
+    m_grade = re.search(r"\b(6|7|8|9|10|11|12)\b", grade_str)
+    grade_num = int(m_grade.group(1)) if m_grade else None
+
+    if grade_num:
+        grade_short = f"Lớp {grade_num}"
+    elif "THCS" in grade_str.upper() or "CẤP 2" in grade_str.upper():
+        grade_short = "Cấp 2"
+    elif "ĐẠI HỌC" in grade_str.upper():
+        grade_short = "Đại học"
+    else:
+        grade_short = "Phổ thông"
+
+    track_raw = str(parsed.get("exam_track") or "THUONG").strip().upper()
+    detailed_raw = str(parsed.get("detailed_exam_track") or "").strip()
+    det_lower = detailed_raw.lower()
+
+    if track_raw == "CHUYEN" or "chuyên" in det_lower and "đề cương" not in det_lower:
+        track_short = "Chuyên"
+    elif track_raw == "HSG" or "học sinh giỏi" in det_lower or "hsg" in det_lower:
+        track_short = "HSG"
+    elif track_raw == "QUOC_TE" or "quốc tế" in det_lower or "ielts" in det_lower:
+        track_short = "Quốc tế"
+    else:
+        track_short = "Thường"
+
+    short_label = f"{grade_short} {track_short} {subj_short}".strip()
+
+    # Xây dựng phần mô tả chi tiết phía sau " — "
+    nature_str = detailed_raw
+    if not nature_str or nature_str.lower() in ("thường", "chung", "hsg", "chuyên"):
+        if track_short == "Chuyên" and grade_num == 9:
+            nature_str = f"Đề thi tuyển sinh vào lớp 10 Chuyên môn {subj_full}"
+        elif track_short == "HSG":
+            nature_str = f"Đề thi chọn Học sinh giỏi môn {subj_full}"
+        elif grade_num == 9:
+            nature_str = f"Đề ôn thi tuyển sinh vào lớp 10 môn {subj_full}"
+        elif grade_num == 12:
+            nature_str = f"Đề ôn luyện / thi thử Tốt nghiệp THPT môn {subj_full}"
+        else:
+            nature_str = f"Đề kiểm tra định kỳ môn {subj_full}"
+    elif subj_short.lower() not in nature_str.lower() and subj_full.lower() not in nature_str.lower():
+        nature_str = f"{nature_str} môn {subj_full}"
+
+    topic_str = str(parsed.get("curriculum_topic_detected") or "").strip()
+    if not topic_str or topic_str.lower() in ("null", "none", "không xác định"):
+        topic_str = _detect_topic_from_text(subj_raw.upper(), grade_num, raw_text, file_name)
+
+    school_str = str(parsed.get("school_or_department") or "").strip()
+    if school_str.lower() in ("null", "none"):
+        school_str = ""
+
+    year_str = str(parsed.get("academic_year") or "").strip()
+    if year_str.lower() in ("null", "none"):
+        year_str = ""
+
+    parts: List[str] = [nature_str]
+    if school_str:
+        parts.append(f"({school_str}{f' • {year_str}' if year_str else ''})")
+    elif year_str:
+        parts.append(f"(năm học {year_str})")
+
+    if topic_str:
+        parts.append(f"trọng tâm: {topic_str}")
+
+    extras: List[str] = []
+    if parsed.get("moet_2025_compliant") is True:
+        extras.append("cấu trúc chuẩn 2025")
+    if parsed.get("has_detailed_solutions") is True:
+        extras.append("có lời giải chi tiết")
+    elif parsed.get("has_answer_keys") is True:
+        extras.append("có đáp án")
+    if extras:
+        parts.append("• " + ", ".join(extras))
+
+    body_desc = " ".join(parts).strip()
+    if not body_desc.endswith("."):
+        body_desc += "."
+
+    exam_description = f"{short_label} — {body_desc}"
+    return short_label, exam_description
 
 
 def _deterministic_post_audit(
@@ -422,6 +667,11 @@ def _deterministic_post_audit(
             else:
                 result["subject"] = "MATHEMATICS"
 
+    short_label, exam_description = build_exam_description_vi(
+        result, file_name=file_name, raw_text=raw_text
+    )
+    result["short_label"] = short_label
+    result["exam_description"] = exam_description
     return result
 
 

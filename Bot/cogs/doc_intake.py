@@ -418,6 +418,7 @@ class DocumentIntakeCog(commands.Cog):
             new_track = str(v.get("exam_track") or "").upper()
             new_school = v.get("school_or_department")
             new_year = v.get("academic_year")
+            new_desc = str(v.get("exam_description") or "").strip()
 
             est_level = new_grade
             if new_detailed and new_detailed not in est_level:
@@ -437,6 +438,7 @@ class DocumentIntakeCog(commands.Cog):
                                 exam_track = COALESCE(NULLIF(?, ''), exam_track),
                                 school_or_department = COALESCE(NULLIF(?, ''), school_or_department),
                                 academic_year = COALESCE(NULLIF(?, ''), academic_year),
+                                notes = COALESCE(NULLIF(?, ''), notes),
                                 quorum_status = 'CLOUD_DEEP_VERIFIED',
                                 verdict = 'CLOUD_DEEP_VERIFIED'
                             WHERE id = ?
@@ -446,6 +448,7 @@ class DocumentIntakeCog(commands.Cog):
                             new_track,
                             new_school if (new_school and str(new_school).lower() != "null") else "",
                             new_year if (new_year and str(new_year).lower() != "null") else "",
+                            new_desc,
                             num_id,
                         )
                     except Exception:
@@ -461,6 +464,7 @@ class DocumentIntakeCog(commands.Cog):
                                 exam_track = COALESCE(NULLIF(?, ''), exam_track),
                                 school_or_department = COALESCE(NULLIF(?, ''), school_or_department),
                                 academic_year = COALESCE(NULLIF(?, ''), academic_year),
+                                notes = COALESCE(NULLIF(?, ''), notes),
                                 verdict = 'CLOUD_DEEP_VERIFIED'
                             WHERE id = ?
                             """,
@@ -469,6 +473,7 @@ class DocumentIntakeCog(commands.Cog):
                             new_track,
                             new_school if (new_school and str(new_school).lower() != "null") else "",
                             new_year if (new_year and str(new_year).lower() != "null") else "",
+                            new_desc,
                             num_id,
                         )
                     except Exception:
@@ -489,7 +494,8 @@ class DocumentIntakeCog(commands.Cog):
             """
             SELECT id, subject, title, file_name, file_size_bytes, file_type,
                    estimated_level, question_count, page_count, author_id, author_name,
-                   timestamp, file_hash, academic_year, school_or_department,
+                   timestamp, file_hash, COALESCE(raw_text, '') AS raw_text, COALESCE(notes, '') AS notes,
+                   academic_year, school_or_department,
                    moet_2025_compliant, moet_part1_count, moet_part2_count, moet_part3_count,
                    has_answer_keys, has_detailed_solutions, file_content_base64
             FROM documents_archive
@@ -649,18 +655,18 @@ class DocumentIntakeCog(commands.Cog):
                             try:
                                 await self.bot.db.execute(
                                     """
-                                    INSERT INTO documents_archive (
-                                        subject, title, file_name, file_size_bytes, file_type,
+                                    INSERT OR REPLACE INTO documents_archive (
+                                        id, subject, title, file_name, file_size_bytes, file_type,
                                         estimated_level, question_count, page_count, author_id,
                                         author_name, channel_id, message_id, jump_url, timestamp,
-                                        file_hash, raw_text, academic_year, school_or_department
-                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        file_hash, raw_text, notes, academic_year, school_or_department
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                     """,
-                                    subject, title, file_name, doc.get("file_size_bytes", 0), doc.get("file_type", "PDF"),
+                                    doc_id, subject, title, file_name, doc.get("file_size_bytes", 0), doc.get("file_type", "PDF"),
                                     grade, q_cnt, p_cnt, doc.get("author_id", 0),
                                     author_name, target_ch.id, posted_msg.id, posted_msg.jump_url,
                                     doc.get("timestamp") or datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                    doc.get("file_hash"), "", academic_year, school
+                                    doc.get("file_hash"), doc.get("raw_text", ""), doc.get("notes", ""), academic_year, school
                                 )
                             except Exception:
                                 pass
@@ -971,8 +977,8 @@ class DocumentIntakeCog(commands.Cog):
                         subject, title, file_name, file_size_bytes, file_type,
                         estimated_level, question_count, page_count, author_id,
                         author_name, channel_id, message_id, jump_url, timestamp, file_hash, content_hash, raw_text,
-                        verdict, exam_track, confidence, academic_year, school_or_department, quorum_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        notes, verdict, exam_track, confidence, academic_year, school_or_department, quorum_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     subject_name,
                     report.file_name,
@@ -991,6 +997,7 @@ class DocumentIntakeCog(commands.Cog):
                     file_hash,
                     c_hash,
                     raw_text,
+                    getattr(report, "human_summary", ""),
                     _verdict,
                     _track,
                     _conf,

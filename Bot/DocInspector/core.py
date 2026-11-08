@@ -628,6 +628,10 @@ class DocumentInspector:
                         pass2.has_answer_key = True
                     if cloud_res.get("has_detailed_solutions") is True:
                         deep_metadata.has_detailed_solutions = True
+
+                    c_exam_desc = str(cloud_res.get("exam_description") or "").strip()
+                    if c_exam_desc:
+                        summary = c_exam_desc
         except Exception:
             pass
 

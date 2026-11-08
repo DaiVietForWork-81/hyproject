@@ -193,7 +193,32 @@ def run_all_tests() -> None:
             assert report.exam_track == tc["expect_track"], (
                 f"{tc['name']}: Expected track {tc['expect_track']}, got {report.exam_track}"
             )
+        assert " — " in (report.human_summary or ""), f"{tc['name']}: Missing exam description in human_summary"
 
+    from DocInspector.cloud_verifier import build_exam_description_vi
+
+    s1, d1 = build_exam_description_vi(
+        {"subject": "INFORMATICS", "grade_level": "Khối 9", "exam_track": "CHUYEN"},
+        file_name="de_chuyen_tin_vao_10.pdf",
+        raw_text="Bài 1: Quy hoạch động. Bài 2: Lý thuyết đồ thị.",
+    )
+    assert s1 == "Lớp 9 Chuyên Tin" and d1.startswith("Lớp 9 Chuyên Tin — "), f"Got {s1} / {d1}"
+
+    s2, d2 = build_exam_description_vi(
+        {"subject": "CHEMISTRY", "grade_level": "Khối 11", "exam_track": "THUONG"},
+        file_name="de_hk1_hoa_11.pdf",
+        raw_text="Câu 1: Cân bằng hóa học và tính pH của dung dịch.",
+    )
+    assert s2 == "Lớp 11 Thường Hóa" and d2.startswith("Lớp 11 Thường Hóa — "), f"Got {s2} / {d2}"
+
+    s3, d3 = build_exam_description_vi(
+        {"subject": "MATHEMATICS", "grade_level": "Khối 7", "exam_track": "HSG"},
+        file_name="de_hsg_toan_7.pdf",
+        raw_text="Bài 1: Tỉ lệ thức và dãy tỉ số bằng nhau. Bài 2: Hai tam giác bằng nhau.",
+    )
+    assert s3 == "Lớp 7 HSG Toán" and d3.startswith("Lớp 7 HSG Toán — "), f"Got {s3} / {d3}"
+
+    print(f"  + Verified descriptions:\n    - {d1}\n    - {d2}\n    - {d3}")
     print("\nALL 10 COMPREHENSIVE MULTI-AGENT EXAMINER TESTS PASSED 100%!")
 
 
